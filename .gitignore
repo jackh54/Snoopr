@@ -20,8 +20,32 @@
 # Go workspace file
 go.work
 
-# build
+# Build directories
 build/
-
-# bin
 bin/
+
+# Built executables (be more specific)
+snoopr-server
+snoopr-client
+snoopr-client.exe
+snoopr-client-updated.exe
+test-client.exe
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
