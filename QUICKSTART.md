@@ -24,10 +24,23 @@ go build -o bin/snoopr-server cmd/server/main.go
 The server will start on `http://0.0.0.0:8080`
 
 ## Step 3: Access Dashboard
+
+### Local Access
 1. Open your browser to `http://localhost:8080`
 2. Login with:
    - **Username:** `admin`
    - **Password:** `admin`
+
+### Network Access (NEW!)
+1. **Find your server IP:** 
+   ```bash
+   # On Windows: ipconfig | findstr IPv4
+   # On Linux/macOS: ifconfig | grep inet
+   ```
+2. **Access from any device on the network:** `http://[SERVER_IP]:8080`
+   - Example: `http://192.168.1.100:8080`
+3. **Works on:** Laptops, phones, tablets, other computers
+4. **Same login credentials:** admin / admin
 
 ## Step 4: Build Client for Target Machine
 Replace `SERVER_IP` with your actual server IP address:
@@ -90,6 +103,8 @@ In the dashboard you can:
 - **Real-time screen capture** from selected client
 - **Automatic updates** every 500ms when active
 - **JPEG compressed** for efficient transmission
+- **🔍 Fullscreen toggle** for detailed viewing
+- **Enhanced UI** with modern glassmorphism design
 - **Click client + Start Screen Share** to begin viewing
 
 ### Activity Logs

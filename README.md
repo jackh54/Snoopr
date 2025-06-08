@@ -9,11 +9,12 @@ Snoopr is a Windows-focused monitoring tool designed for cybersecurity education
 ## Features
 
 ### Server Dashboard
-- 🌐 Web-based administration interface
+- 🌐 Modern web-based administration interface
+- 🎨 **NEW:** Enhanced UI with glassmorphism design
 - 🔐 Login authentication (default: admin/admin)
-- 👥 Real-time client management
+- 👥 Real-time client management with improved styling
 - 📊 Activity monitoring and logging
-- 🖥️ **NEW:** Live screen viewing and capture
+- 🖥️ **NEW:** Live screen viewing with fullscreen toggle
 - 💬 Remote message broadcasting
 - 🔧 Client control capabilities
 - 🔄 **NEW:** Smart client reconnection system
@@ -114,7 +115,8 @@ make client SERVER_IP=192.168.1.100 SERVER_PORT=8080
    ```
 
 2. **Access Dashboard:**
-   - Open browser to `http://localhost:8080`
+   - **Local:** `http://localhost:8080`  
+   - **Network:** `http://[SERVER_IP]:8080` (accessible from any device on network)
    - Login with `admin` / `admin`
 
 3. **Dashboard Features:**
