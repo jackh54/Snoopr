@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -62,10 +64,20 @@ func main() {
 		},
 	}
 
-	// Elevate privileges and open firewall port on Windows
+	// Windows-specific setup
 	if runtime.GOOS == "windows" {
 		elevatePrivileges()
 		openFirewallPort()
+	}
+
+	// Check if port is available
+	if !isPortAvailable(8080) {
+		fmt.Printf("Error: Port 8080 is already in use!\n")
+		fmt.Printf("Please:\n")
+		fmt.Printf("1. Close any other applications using port 8080\n")
+		fmt.Printf("2. Or modify the port in the source code\n")
+		fmt.Printf("3. Check with: netstat -ano | findstr :8080\n")
+		os.Exit(1)
 	}
 
 	r := mux.NewRouter()
@@ -103,18 +115,83 @@ func main() {
 	fmt.Println("Dashboard: http://localhost:8080")
 	fmt.Printf("Credentials: %s / %s\n", server.username, server.password)
 
-	log.Fatal(http.ListenAndServe("0.0.0.0:8080", r))
+	if runtime.GOOS == "windows" {
+		fmt.Println("\nWindows Notes:")
+		fmt.Println("- If Windows Firewall blocks connections, manually allow port 8080")
+		fmt.Println("- For network access, ensure port 8080 is accessible from other machines")
+	}
+
+	fmt.Println("\nServer ready! Press Ctrl+C to stop.")
+
+	err := http.ListenAndServe("0.0.0.0:8080", r)
+	if err != nil {
+		fmt.Printf("Server failed to start: %v\n", err)
+		if runtime.GOOS == "windows" {
+			fmt.Println("\nWindows troubleshooting:")
+			fmt.Println("1. Run as Administrator for full functionality")
+			fmt.Println("2. Check if port 8080 is in use: netstat -ano | findstr :8080")
+			fmt.Println("3. Try disabling Windows Firewall temporarily")
+		}
+		os.Exit(1)
+	}
 }
 
 func elevatePrivileges() {
-	cmd := exec.Command("powershell", "-Command", "Start-Process", "cmd", "-Verb", "runAs")
-	cmd.Run()
+	// Check if already running as admin
+	if !isAdmin() {
+		fmt.Println("Note: For full functionality on Windows, run as Administrator")
+		fmt.Println("Some features like firewall configuration may not work")
+		return
+	}
+}
+
+func isAdmin() bool {
+	if runtime.GOOS != "windows" {
+		return true
+	}
+
+	cmd := exec.Command("net", "session")
+	err := cmd.Run()
+	return err == nil
+}
+
+func isPortAvailable(port int) bool {
+	address := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return false
+	}
+	listener.Close()
+	return true
 }
 
 func openFirewallPort() {
-	cmd := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
-		"name=Snoopr Server", "dir=in", "action=allow", "protocol=TCP", "localport=8080")
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	// Only try to open firewall if running as admin
+	if !isAdmin() {
+		fmt.Println("Skipping firewall configuration (not running as admin)")
+		return
+	}
+
+	fmt.Println("Configuring Windows firewall...")
+
+	// Remove existing rule first (ignore errors)
+	cmd := exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name=Snoopr Server")
 	cmd.Run()
+
+	// Add new rule
+	cmd = exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+		"name=Snoopr Server", "dir=in", "action=allow", "protocol=TCP", "localport=8080")
+	err := cmd.Run()
+	if err != nil {
+		fmt.Printf("Warning: Could not configure firewall rule: %v\n", err)
+		fmt.Println("You may need to manually allow port 8080 in Windows Firewall")
+	} else {
+		fmt.Println("Firewall rule added successfully")
+	}
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
