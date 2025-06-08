@@ -57,12 +57,20 @@ This creates `bin/snoopr-client.exe` configured for your server.
    - Add itself to Windows startup
    - Begin activity monitoring
 
+### 🔄 Client Updates (NEW!)
+- **Running the client again** will update the existing connection
+- **No duplicate clients** - smart reconnection system
+- **Maintains same client ID** for consistent tracking
+- **Seamless updates** without losing connection history
+
 ## Step 6: Monitor Activity
 In the dashboard you can:
 - ✅ View connected clients in real-time
+- ✅ **NEW:** Live screen viewing with real-time capture
 - ✅ Monitor activity logs (keystrokes, window changes)
 - ✅ Send pop-up messages to clients
 - ✅ Start/stop logging
+- ✅ **NEW:** Start/stop screen sharing
 - ✅ Execute remote commands
 
 ## Dashboard Features
@@ -75,7 +83,14 @@ In the dashboard you can:
 ### Controls
 - **Send Message:** Pop up message on client screen
 - **Start/Stop Logging:** Control activity monitoring
+- **Start/Stop Screen Share:** Enable live screen viewing
 - **Message Input:** Type custom messages
+
+### Live Screen View
+- **Real-time screen capture** from selected client
+- **Automatic updates** every 500ms when active
+- **JPEG compressed** for efficient transmission
+- **Click client + Start Screen Share** to begin viewing
 
 ### Activity Logs
 - Real-time keystroke logging

